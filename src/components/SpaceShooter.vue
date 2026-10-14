@@ -1,7 +1,7 @@
 <template>
   <div class="stage">
     <div v-if="loading" class="loader">
-      <div class="loader-title">SPACE SHOOTER</div>
+      <div class="loader-title">ASTRO BLASTER</div>
       <div class="loader-bar">
         <div class="loader-fill" :style="{ width: progress * 100 + '%' }"></div>
       </div>

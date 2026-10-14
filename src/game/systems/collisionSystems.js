@@ -55,7 +55,7 @@ export function checkEnemiesVsPlayer(enemies, player, onHit) {
     if (e.dead) continue
     if (circleHit(e.x, e.y, e.radius, player.x, player.y, player.radius)) {
       e.dead = true
-      onHit()
+      onHit(e)
     }
   }
 }
