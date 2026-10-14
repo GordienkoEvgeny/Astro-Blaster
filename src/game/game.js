@@ -7,6 +7,9 @@ import { Audio } from './core/audio.js'
 import { Player } from './entities/player.js'
 import { Bullet } from './entities/bullet.js'
 import { Particle } from './entities/particle.js'
+import { Explosion } from './entities/Explosion.js'
+import { Debris } from './entities/Debris.js'
+import { HomingMissile } from './entities/HomingMissile.js'
 import { Boss } from './entities/boss.js'
 import { SpawnSystem } from './systems/spawnSystem.js'
 import { getDifficulty } from './systems/difficultySystem.js'
@@ -49,7 +52,10 @@ export class Game {
     this.bullets = []
     this.enemies = []
     this.particles = []
+    this.explosions = []
+    this.debris = []
     this.enemyBullets = []
+    this.homingMissiles = []
     this.boss = null
 
     this.score = 0
@@ -67,7 +73,6 @@ export class Game {
     this.lastTime = 0
     this.started = false
 
-    // Текущая сложность (для отладки / HUD)
     this.difficulty = null
 
     this._loop = this._loop.bind(this)
@@ -152,7 +157,10 @@ export class Game {
     this.bullets = []
     this.enemies = []
     this.particles = []
+    this.explosions = []
+    this.debris = []
     this.enemyBullets = []
+    this.homingMissiles = []
     this.boss = null
     this.enterLevel()
   }
@@ -170,6 +178,8 @@ export class Game {
     this.bgTile = null
     this.bgTileUrl = null
 
+    this.homingMissiles = []
+
     this.generateStars()
   }
 
@@ -178,7 +188,6 @@ export class Game {
     const diff = getDifficulty(this.levelIndex, this.waveTimer, level.duration)
 
     this.boss = new Boss(level.boss, this.W)
-    // Усиливаем босса по кривой сложности
     this.boss.maxHp = Math.round(this.boss.maxHp * diff.bossHpMul)
     this.boss.hp = this.boss.maxHp
     this.boss.attackInterval = this.boss.attackInterval / diff.bossAttackRateMul
@@ -193,6 +202,7 @@ export class Game {
     this.boss = null
     this.enemies = []
     this.enemyBullets = []
+    this.homingMissiles = []
     this.levelIndex++
     if (this.levelIndex >= LEVELS.length) {
       this.state = STATES.WIN
@@ -218,7 +228,10 @@ export class Game {
     this.enemies = []
     this.bullets = []
     this.enemyBullets = []
+    this.homingMissiles = []
     this.particles = []
+    this.explosions = []
+    this.debris = []
   }
 
   // ============================================================
@@ -284,7 +297,32 @@ export class Game {
     for (const p of this.particles) p.update(dt)
     this.particles = this.particles.filter(p => !p.dead)
 
-    // Считаем текущую сложность — используется во всех системах
+    // Осколки
+    for (const d of this.debris) d.update(dt)
+
+    // Осколки бьют игрока
+    if (this.player && this.player.invulnTimer <= 0) {
+      for (let i = this.debris.length - 1; i >= 0; i--) {
+        const d = this.debris[i]
+        const dx = d.x - this.player.x
+        const dy = d.y - this.player.y
+        const rr = d.size + this.player.radius * 0.7
+        if (dx * dx + dy * dy < rr * rr) {
+          this.damagePlayer(1)
+          this.spawnParticles(d.x, d.y, d.color, 6)
+          d.dead = true
+          break
+        }
+      }
+    }
+
+    this.debris = this.debris.filter(d => !d.dead)
+
+    // Взрывы
+    for (const ex of this.explosions) ex.update(dt)
+    this.explosions = this.explosions.filter(ex => !ex.dead)
+
+    // Сложность
     const level = LEVELS[Math.min(this.levelIndex, LEVELS.length - 1)]
     const diff = getDifficulty(this.levelIndex, this.waveTimer, level.duration)
     this.difficulty = diff
@@ -295,21 +333,20 @@ export class Game {
       if (this.waveTimer >= level.duration) {
         this.spawnBoss()
       } else {
-        // Спавним, только если есть место
         if (this.enemies.length < diff.maxEnemies) {
           const enemy = this.spawn.update(dt, W, this.waveLevel, diff)
           if (enemy) this.enemies.push(enemy)
         }
-        // waveLevel растёт каждые 5 сек
         this.waveLevel = 1 + Math.floor(this.waveTimer / 5)
       }
     }
 
-    // Враги — темп стрельбы ускоряется вместе со сложностью
+    // Враги
     const fireRateMul = diff.enemyFireRateMul || 1
     for (const e of this.enemies) {
-      // Умножаем dt для внутреннего таймера стрельбы → стреляет чаще
       e.update(dt * fireRateMul, W, H, player.x, player.y, 280)
+
+      // Стрельба обычными пулями
       if (e.shouldShoot) {
         e.shouldShoot = false
         const dx = player.x - e.x, dy = player.y - e.y
@@ -322,13 +359,70 @@ export class Game {
           false
         ))
       }
+
+      // Пуск самонаводящейся ракеты
+      if (e.shouldLaunchMissile) {
+        e.shouldLaunchMissile = false
+        this.homingMissiles.push(new HomingMissile(
+          e.x, e.y + e.radius,
+          player,
+          {
+            speed: 300 + this.levelIndex * 30,
+            turnRate: 3.5 + this.levelIndex * 0.3,
+            life: 6,
+            radius: 6,
+            damage: 1,
+          }
+        ))
+        this.audio.play('rocket')
+      }
     }
+
+    // Ракеты — обновление
+    for (const m of this.homingMissiles) m.update(dt)
+
+    // Ракеты vs игрок
+    if (player.invulnTimer <= 0) {
+      for (let i = this.homingMissiles.length - 1; i >= 0; i--) {
+        const m = this.homingMissiles[i]
+        const dx = m.x - player.x, dy = m.y - player.y
+        const rr = m.radius + player.radius * 0.7
+        if (dx * dx + dy * dy < rr * rr) {
+          this.spawnParticles(m.x, m.y, '#f97316', 14, 220)
+          this.spawnExplosion(m.x, m.y, 40)
+          this.homingMissiles.splice(i, 1)
+          this.damagePlayer(m.damage)
+          this.cameraShake = Math.max(this.cameraShake, 12)
+        }
+      }
+    }
+
+    // Пули игрока vs ракеты — сбиваем ракеты
+    for (let i = this.homingMissiles.length - 1; i >= 0; i--) {
+      const m = this.homingMissiles[i]
+      for (let j = this.bullets.length - 1; j >= 0; j--) {
+        const b = this.bullets[j]
+        if (b.dead) continue
+        const dx = m.x - b.x, dy = m.y - b.y
+        const rr = m.radius + b.radius
+        if (dx * dx + dy * dy < rr * rr) {
+          this.spawnParticles(m.x, m.y, '#f97316', 10)
+          this.spawnExplosion(m.x, m.y, 35)
+          this.homingMissiles.splice(i, 1)
+          this.bullets.splice(j, 1)
+          this.audio.play('explode')
+          break
+        }
+      }
+    }
+
+    this.homingMissiles = this.homingMissiles.filter(m => !m.dead)
 
     // Пули
     for (const b of this.bullets) b.update(dt, W, H)
     for (const b of this.enemyBullets) b.update(dt, W, H)
 
-    // Босс — атакует чаще в зависимости от сложности
+    // Босс
     if (this.boss) {
       const bossDt = dt * (diff.bossAttackRateMul || 1)
       this.boss.update(bossDt, player.x, player.y)
@@ -349,6 +443,7 @@ export class Game {
         this.score += 500 * (1 + this.levelIndex)
         this.spawnParticles(this.boss.x, this.boss.y, this.boss.color, 60, 400)
         this.spawnParticles(this.boss.x, this.boss.y, this.boss.accent, 30, 300)
+        this.spawnExplosion(this.boss.x, this.boss.y, this.boss.radius * 6)
         this.audio.play('explode')
         this.cameraShake = 24
         this.flashAlpha = 0.9
@@ -367,18 +462,38 @@ export class Game {
       (enemy) => {
         this.score += enemy.type === 'shooter' ? 30
                   : enemy.type === 'zigzag' ? 20
+                  : enemy.type === 'asteroid' ? 25
+                  : enemy.type === 'fighter' ? 60
                   : 10
+
         const color = enemy.type === 'shooter' ? COLORS.enemyShooter
                     : enemy.type === 'zigzag' ? COLORS.enemyZigzag
+                    : enemy.type === 'asteroid' ? '#a88c6b'
+                    : enemy.type === 'fighter' ? '#ef4444'
                     : COLORS.enemyBasic
+
         this.spawnParticles(enemy.x, enemy.y, color, 14)
+
+        if (enemy.type === 'asteroid') {
+          this.spawnAsteroidDebris(enemy.x, enemy.y, enemy.radius)
+        }
+
+        const boomSize = enemy.type === 'asteroid' ? enemy.radius * 5
+                       : enemy.type === 'shooter' ? enemy.radius * 4
+                       : enemy.type === 'fighter' ? enemy.radius * 5
+                       : enemy.radius * 3.5
+        this.spawnExplosion(enemy.x, enemy.y, boomSize)
+
         this.audio.play('explode')
-        this.cameraShake = Math.max(this.cameraShake, 4)
+        this.cameraShake = Math.max(this.cameraShake, enemy.type === 'asteroid' ? 10 : 4)
       }
     )
 
     checkBulletsVsPlayer(this.enemyBullets, player, () => this.damagePlayer())
-    checkEnemiesVsPlayer(this.enemies, player, () => this.damagePlayer())
+    checkEnemiesVsPlayer(this.enemies, player, (enemy) => {
+      const dmg = enemy?.type === 'asteroid' ? 2 : 1
+      this.damagePlayer(dmg)
+    })
 
     // Фильтры
     this.bullets = this.bullets.filter(b => !b.dead)
@@ -390,13 +505,22 @@ export class Game {
     if (this.flashAlpha > 0) this.flashAlpha = Math.max(0, this.flashAlpha - 3 * dt)
   }
 
-  damagePlayer() {
-    if (!this.player.takeDamage()) return
-    this.spawnParticles(this.player.x, this.player.y, '#facc15', 16)
+  damagePlayer(amount = 1) {
+    if (!this.player) return
+    if (this.player.invulnTimer > 0) return
+
+    this.player.hp -= amount
+    this.player.invulnTimer = 1.5
+
+    this.spawnParticles(this.player.x, this.player.y, '#facc15', 20)
     this.audio.play('playerHit')
     this.cameraShake = 16
-    this.flashAlpha = 0.5
-    if (this.player.hp <= 0) this.gameOver()
+    this.flashAlpha = 0.6
+
+    if (this.player.hp <= 0) {
+      this.player.hp = 0
+      this.gameOver()
+    }
   }
 
   spawnParticles(x, y, color, count = 12, speed = 180) {
@@ -404,6 +528,32 @@ export class Game {
       const a = Math.random() * Math.PI * 2
       const s = speed * (0.4 + Math.random() * 0.8)
       this.particles.push(new Particle(x, y, Math.cos(a) * s, Math.sin(a) * s, color, 0.4 + Math.random() * 0.4))
+    }
+  }
+
+  spawnExplosion(x, y, size) {
+    this.explosions.push(new Explosion(x, y, size))
+  }
+
+  spawnAsteroidDebris(x, y, radius) {
+    const count = 10 + Math.floor(Math.random() * 5)
+    const palette = ['#a88c6b', '#8b7355', '#6b5843', '#c9b59a']
+
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.5
+      const speed = 180 + Math.random() * 280
+      const size = 3 + Math.random() * 5
+
+      const vx = Math.cos(angle) * speed
+      const vy = Math.sin(angle) * speed
+
+      this.debris.push(new Debris(
+        x, y,
+        vx, vy,
+        size,
+        palette[Math.floor(Math.random() * palette.length)],
+        1.5 + Math.random() * 1.5
+      ))
     }
   }
 
@@ -445,6 +595,7 @@ export class Game {
     ctx.save()
     ctx.translate(shakeX, shakeY)
 
+    // Частицы
     for (const p of this.particles) {
       const x = p.prevX + (p.x - p.prevX) * alpha
       const y = p.prevY + (p.y - p.prevY) * alpha
@@ -456,10 +607,104 @@ export class Game {
     }
     ctx.globalAlpha = 1
 
+    // Осколки
+    for (const d of this.debris) {
+      const x = d.prevX + (d.x - d.prevX) * alpha
+      const y = d.prevY + (d.y - d.prevY) * alpha
+
+      const alphaDraw = Math.min(1, d.life / 0.5)
+
+      ctx.save()
+      ctx.globalAlpha = alphaDraw
+      ctx.translate(x, y)
+      ctx.rotate(d.rotation)
+
+      // Хвост
+      ctx.save()
+      ctx.globalAlpha = alphaDraw * 0.35
+      const angle = Math.atan2(d.vy, d.vx)
+      ctx.rotate(angle + Math.PI - d.rotation)
+      const trailLen = d.size * 2.5
+      ctx.fillStyle = d.color
+      ctx.fillRect(0, -d.size * 0.3, trailLen, d.size * 0.6)
+      ctx.restore()
+
+      // Осколок
+      ctx.globalAlpha = alphaDraw
+      ctx.fillStyle = d.color
+      ctx.beginPath()
+      for (let k = 0; k < d.vertices; k++) {
+        const a = (k / d.vertices) * Math.PI * 2
+        const r = d.size * (0.7 + Math.sin(d.shapeSeed + k * 1.7) * 0.3)
+        const px = Math.cos(a) * r
+        const py = Math.sin(a) * r
+        if (k === 0) ctx.moveTo(px, py)
+        else ctx.lineTo(px, py)
+      }
+      ctx.closePath()
+      ctx.fill()
+
+      ctx.restore()
+    }
+    ctx.globalAlpha = 1
+
+    // Взрывы
+    for (const ex of this.explosions) {
+      const img = loadSprite(ex.currentFrameKey)
+      if (!isSpriteReady(img)) continue
+
+      const p = ex.progress
+      const scale = 0.8 + p * 0.4
+      const size = ex.size * scale
+      const alphaDraw = 1 - Math.max(0, (p - 0.7) / 0.3)
+
+      ctx.save()
+      ctx.globalAlpha = alphaDraw
+      ctx.translate(ex.x, ex.y)
+      ctx.rotate(ex.rotation)
+      ctx.drawImage(img, -size / 2, -size / 2, size, size)
+      ctx.restore()
+    }
+    ctx.globalAlpha = 1
+
     for (const e of this.enemies) this.drawEnemy(e, alpha)
     if (this.boss) this.drawBoss(this.boss, alpha)
     for (const b of this.bullets) this.drawBullet(b, alpha, true)
     for (const b of this.enemyBullets) this.drawBullet(b, alpha, false)
+
+    // Самонаводящиеся ракеты
+    for (const m of this.homingMissiles) {
+      const x = m.prevX + (m.x - m.prevX) * alpha
+      const y = m.prevY + (m.y - m.prevY) * alpha
+
+      ctx.save()
+      ctx.translate(x, y)
+      ctx.rotate(m.angle)
+
+      // Хвост ракеты
+      ctx.fillStyle = 'rgba(251,146,60,0.8)'
+      ctx.shadowColor = '#f97316'
+      ctx.shadowBlur = 14
+      ctx.beginPath()
+      ctx.moveTo(-m.radius - 6, 0)
+      ctx.lineTo(-m.radius - 2, -4)
+      ctx.lineTo(-m.radius - 2, 4)
+      ctx.closePath()
+      ctx.fill()
+
+      // Корпус ракеты
+      ctx.fillStyle = '#ef4444'
+      ctx.beginPath()
+      ctx.moveTo(m.radius, 0)
+      ctx.lineTo(-m.radius * 0.6, -m.radius * 0.6)
+      ctx.lineTo(-m.radius * 0.6, m.radius * 0.6)
+      ctx.closePath()
+      ctx.fill()
+
+      ctx.shadowBlur = 0
+      ctx.restore()
+    }
+
     if (this.player) this.drawPlayer(this.player, alpha, now)
     if (this.input.joyVisual.active) this.drawJoystick()
 
@@ -507,7 +752,6 @@ export class Game {
     ctx.fillStyle = '#0b1026'
     ctx.fillRect(0, 0, W, H)
 
-    // Звёзды
     for (const s of this.stars) {
       const tw = 0.8 + Math.sin(s.twinklePhase) * 0.2
       ctx.globalAlpha = s.alpha * tw
@@ -574,6 +818,13 @@ export class Game {
   }
 
   drawShipIcon(ctx, x, y, ship, scale = 1) {
+    const img = loadSprite(`player_${ship.id}`)
+    if (isSpriteReady(img)) {
+      const size = ship.size * 3 * scale
+      ctx.drawImage(img, x - size / 2, y - size / 2, size, size)
+      return
+    }
+
     const s = ship.size * scale
     ctx.save()
     ctx.translate(x, y)
@@ -652,59 +903,132 @@ export class Game {
   }
 
   drawEnemy(enemy, alpha) {
-    const ctx = this.ctx
-    const x = enemy.prevX + (enemy.x - enemy.prevX) * alpha
-    const y = enemy.prevY + (enemy.y - enemy.prevY) * alpha
-    const r = enemy.radius
+  const ctx = this.ctx
+  const x = enemy.prevX + (enemy.x - enemy.prevX) * alpha
+  const y = enemy.prevY + (enemy.y - enemy.prevY) * alpha
+  const r = enemy.radius
 
-    const img = loadSprite(`enemy_${enemy.type}`)
-    if (isSpriteReady(img)) {
-      const size = r * 2.5
-      ctx.drawImage(img, x - size / 2, y - size / 2, size, size)
+  // Ключ спрайта: для астероидов свой spriteKey, для остальных — по типу
+  const key = enemy.spriteKey || `enemy_${enemy.type}`
+  const img = loadSprite(key)
+
+  if (isSpriteReady(img)) {
+    const size = r * 2.6
+
+    // --- АСТЕРОИДЫ: с вращением ---
+    if (enemy.type === 'asteroid') {
+      ctx.save()
+      ctx.translate(x, y)
+      ctx.rotate(enemy.rotation)
+      ctx.drawImage(img, -size / 2, -size / 2, size, size)
+
+      if (enemy.hitFlash > 0) {
+        ctx.save()
+        ctx.globalAlpha = Math.min(1, enemy.hitFlash * 10)
+        ctx.filter = 'brightness(3) saturate(0.3)'
+        ctx.drawImage(img, -size / 2, -size / 2, size, size)
+        ctx.restore()
+      }
+      ctx.restore()
       return
     }
 
-    let color = COLORS.enemyBasic
-    if (enemy.type === 'zigzag') color = COLORS.enemyZigzag
-    if (enemy.type === 'shooter') color = COLORS.enemyShooter
-    if (enemy.hitFlash > 0) color = '#fff'
+    // --- ИСТРЕБИТЕЛЬ: развёрнут на 180° ---
+    if (enemy.type === 'fighter') {
+      ctx.save()
+      ctx.translate(x, y)
+      ctx.rotate(Math.PI)                 // 180°
+      ctx.drawImage(img, -size / 2, -size / 2, size, size)
 
-    ctx.save()
-    ctx.translate(x, y)
-    ctx.shadowColor = color
-    ctx.shadowBlur = 10
-    ctx.fillStyle = color
-
-    if (enemy.type === 'zigzag') {
-      ctx.beginPath()
-      ctx.moveTo(0, -r)
-      ctx.lineTo(r, 0)
-      ctx.lineTo(0, r)
-      ctx.lineTo(-r, 0)
-      ctx.closePath()
-      ctx.fill()
-    } else if (enemy.type === 'shooter') {
-      ctx.beginPath()
-      for (let k = 0; k < 6; k++) {
-        const a = (k / 6) * Math.PI * 2 - Math.PI / 2
-        const px = Math.cos(a) * r, py = Math.sin(a) * r
-        k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+      if (enemy.hitFlash > 0) {
+        ctx.save()
+        ctx.globalAlpha = Math.min(1, enemy.hitFlash * 10)
+        ctx.filter = 'brightness(3) saturate(0.3)'
+        ctx.drawImage(img, -size / 2, -size / 2, size, size)
+        ctx.restore()
       }
-      ctx.closePath()
-      ctx.fill()
-    } else {
-      ctx.beginPath()
-      ctx.arc(0, 0, r, 0, Math.PI * 2)
-      ctx.fill()
+      ctx.restore()
+      return
     }
 
-    ctx.shadowBlur = 0
-    ctx.fillStyle = '#0b1026'
-    ctx.beginPath()
-    ctx.arc(0, 2, 3, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.restore()
+    // --- ВСЁ ОСТАЛЬНОЕ: без поворота ---
+    ctx.drawImage(img, x - size / 2, y - size / 2, size, size)
+
+    if (enemy.hitFlash > 0) {
+      ctx.save()
+      ctx.globalAlpha = Math.min(1, enemy.hitFlash * 10)
+      ctx.filter = 'brightness(3) saturate(0.3)'
+      ctx.drawImage(img, x - size / 2, y - size / 2, size, size)
+      ctx.restore()
+    }
+    return
   }
+
+  // ===== CSS-ФОЛБЭК (если спрайт не загрузился) =====
+  let color = COLORS.enemyBasic
+  if (enemy.type === 'zigzag') color = COLORS.enemyZigzag
+  if (enemy.type === 'shooter') color = COLORS.enemyShooter
+  if (enemy.type === 'asteroid') color = '#a88c6b'
+  if (enemy.type === 'fighter') color = '#ef4444'
+  if (enemy.hitFlash > 0) color = '#fff'
+
+  ctx.save()
+  ctx.translate(x, y)
+  ctx.shadowColor = color
+  ctx.shadowBlur = 10
+  ctx.fillStyle = color
+
+  if (enemy.type === 'zigzag') {
+    ctx.beginPath()
+    ctx.moveTo(0, -r)
+    ctx.lineTo(r, 0)
+    ctx.lineTo(0, r)
+    ctx.lineTo(-r, 0)
+    ctx.closePath()
+    ctx.fill()
+  } else if (enemy.type === 'shooter') {
+    ctx.beginPath()
+    for (let k = 0; k < 6; k++) {
+      const a = (k / 6) * Math.PI * 2 - Math.PI / 2
+      const px = Math.cos(a) * r, py = Math.sin(a) * r
+      k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+    }
+    ctx.closePath()
+    ctx.fill()
+  } else if (enemy.type === 'asteroid') {
+    ctx.beginPath()
+    for (let k = 0; k < 9; k++) {
+      const a = (k / 9) * Math.PI * 2
+      const rr = r * (0.85 + Math.sin(k * 2.3) * 0.15)
+      const px = Math.cos(a) * rr
+      const py = Math.sin(a) * rr
+      k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+    }
+    ctx.closePath()
+    ctx.fill()
+  } else if (enemy.type === 'fighter') {
+    // Стрелка вниз
+    ctx.beginPath()
+    ctx.moveTo(0, r)
+    ctx.lineTo(r * 0.7, -r * 0.6)
+    ctx.lineTo(r * 0.3, -r)
+    ctx.lineTo(-r * 0.3, -r)
+    ctx.lineTo(-r * 0.7, -r * 0.6)
+    ctx.closePath()
+    ctx.fill()
+  } else {
+    ctx.beginPath()
+    ctx.arc(0, 0, r, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  ctx.shadowBlur = 0
+  ctx.fillStyle = '#0b1026'
+  ctx.beginPath()
+  ctx.arc(0, 2, 3, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+}
 
   drawBoss(boss, alpha) {
     const ctx = this.ctx
@@ -808,7 +1132,6 @@ export class Game {
       ctx.fillText(`${lvl.name} (ур. ${this.levelIndex + 1}/${LEVELS.length})`, 14, 88)
     }
 
-    // Индикатор сложности
     if (this.difficulty && (this.state === STATES.PLAYING || this.state === STATES.BOSS)) {
       ctx.fillStyle = 'rgba(255,255,255,0.5)'
       ctx.font = 'bold 11px Arial'

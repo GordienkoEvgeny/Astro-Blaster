@@ -32,7 +32,7 @@ export function getDifficulty(levelIndex, elapsed, levelDuration) {
     enemyFireRateMul: combined,
 
     // Максимум врагов одновременно на экране
-    maxEnemies: Math.min(40, 6 + levelIndex * 2 + Math.floor(t * 6)),
+    maxEnemies: Math.min(80, 10 + levelIndex * 3 + Math.floor(t * 8)),
 
     // Скорость пуль врага
     enemyBulletSpeedMul: 1 + levelIndex * 0.1 + t * 0.3,

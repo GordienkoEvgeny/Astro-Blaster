@@ -6,14 +6,21 @@
  * Когда появятся PNG — положи их в public/sprites/ и раскомментируй.
  */
 export const SPRITES = {
-  // player_heavy:  '/sprites/player_heavy.png',
-  // player_medium: '/sprites/player_medium.png',
-  // player_light:  '/sprites/player_light.png',
-  // enemy_basic:   '/sprites/enemies/basic.png',
-  // enemy_zigzag:  '/sprites/enemies/zigzag.png',
-  // enemy_shooter: '/sprites/enemies/shooter.png',
-  // boss_scorpion: '/sprites/bosses/scorpion.png',
-  // boss_crab:     '/sprites/bosses/crab.png',
+  player_heavy:  '/sprites/player_heavy.png',
+  player_medium: '/sprites/player_medium.png',
+  player_light:  '/sprites/player_light.png',
+
+  asteroid_1: '/sprites/enemies/asteroid_1.png',
+  asteroid_2: '/sprites/enemies/asteroid_2.png',
+  asteroid_3: '/sprites/enemies/asteroid_3.png',
+  asteroid_4: '/sprites/enemies/asteroid_4.png',
+
+  enemy_fighter: '/sprites/enemies/fighter.png',   // ← добавили
+
+  explosion_1: '/sprites/explosions/explosion_1.png',
+  explosion_2: '/sprites/explosions/explosion_2.png',
+  explosion_3: '/sprites/explosions/explosion_3.png',
+  explosion_4: '/sprites/explosions/explosion_4.png',
 }
 
 const cache = {}

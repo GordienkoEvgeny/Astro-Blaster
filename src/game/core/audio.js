@@ -32,6 +32,7 @@ export class Audio {
       case 'bossSpawn': this.beep(80, 0.8, 'sawtooth', 0.15, 200); break
       case 'gameOver': this.beep(440, 1.2, 'sine', 0.12, 80); break
       case 'win': this.beep(660, 0.15, 'sine', 0.1, 1320); break
+      case 'rocket': this.beep(220, 0.2, 'sawtooth', 0.08, 500); break
     }
   }
 
